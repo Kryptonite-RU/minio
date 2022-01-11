@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/pb"
@@ -17,10 +18,6 @@ import (
 	"github.com/minio/minio-go/v6/pkg/s3utils"
 	minio "github.com/minio/minio/cmd"
 	"google.golang.org/grpc"
-)
-
-const (
-	weedSeparator = minio.SlashSeparator
 )
 
 func init() {
@@ -116,6 +113,10 @@ type weedObjects struct {
 	Metrics    *minio.BackendMetrics
 }
 
+func (w *weedObjects) weedPathJoin(args ...string) string {
+	return minio.PathJoin(append([]string{BucketDir, weedSeparator}, args...)...)
+}
+
 func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, opts minio.ObjectOptions) error {
 	path := util.NewFullPath(w.weedPathJoin(bucket), key)
 	destURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
@@ -143,15 +144,13 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 		return objInfo, err
 	}
 
-	modTime := time.Unix(entry.Attributes.Mtime, 0)
-
 	return minio.ObjectInfo{
 		Bucket:  bucket,
 		Name:    object,
-		ModTime: modTime,
+		ModTime: time.Unix(entry.Attributes.Mtime, 0),
 		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.IsDirectory,
-		AccTime: modTime,
+		AccTime: time.Time{},
 	}, nil
 }
 
@@ -179,23 +178,6 @@ func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string,
 	return minio.NewGetObjectReaderFromReader(pr, objInfo, opts, pipeCloser)
 }
 
-func (w *weedObjects) list(parentDirectoryPath, prefix, startFrom string, inclusive bool, limit uint32) (entries []*filer_pb.Entry, isLast bool, err error) {
-
-	err = filer_pb.List(w.Client, parentDirectoryPath, prefix, func(entry *filer_pb.Entry, isLastEntry bool) error {
-		entries = append(entries, entry)
-		if isLastEntry {
-			isLast = true
-		}
-		return nil
-	}, startFrom, inclusive, limit)
-
-	if len(entries) == 0 {
-		isLast = true
-	}
-	return
-
-}
-
 func (w *weedObjects) ListBuckets(ctx context.Context) (buckets []minio.BucketInfo, err error) {
 
 	entries, _, err := w.list(BucketDir, "", "", false, math.MaxInt32)
@@ -205,40 +187,13 @@ func (w *weedObjects) ListBuckets(ctx context.Context) (buckets []minio.BucketIn
 
 	for _, entry := range entries {
 		if entry.IsDirectory {
-			modTime := time.Unix(entry.Attributes.Mtime, 0)
 			buckets = append(buckets, minio.BucketInfo{
 				Name:    entry.Name,
-				Created: modTime,
+				Created: time.Unix(entry.Attributes.Crtime, 0),
 			})
 		}
 	}
 	return buckets, nil
-}
-
-func (w *weedObjects) weedPathJoin(args ...string) string {
-	return minio.PathJoin(append([]string{BucketDir, weedSeparator}, args...)...)
-}
-
-func (w *weedObjects) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-
-	var objects []minio.ObjectInfo
-	path := w.weedPathJoin(bucket)
-
-	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
-	if err != nil {
-		return loi, err
-	}
-
-	for _, entry := range entries {
-		objects = append(objects, entryInfoToObjectInfo(bucket, entry))
-	}
-
-	return minio.ListObjectsInfo{
-		IsTruncated: false,
-		NextMarker:  "",
-		Objects:     objects,
-		Prefixes:    []string{},
-	}, nil
 }
 
 func (w *weedObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int,
@@ -261,14 +216,55 @@ func (w *weedObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continu
 	}, nil
 }
 
+func (w *weedObjects) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
+
+	var objects []minio.ObjectInfo
+	path := w.weedPathJoin(bucket, prefix)
+
+	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
+	if err != nil {
+		return loi, err
+	}
+
+	for _, entry := range entries {
+		if prefix != "" {
+			entry.Name = prefix + entry.Name
+		}
+		objects = append(objects, entryInfoToObjectInfo(bucket, entry))
+	}
+
+	return minio.ListObjectsInfo{
+		IsTruncated: false,
+		NextMarker:  "",
+		Objects:     objects,
+		Prefixes:    []string{},
+	}, nil
+}
+
+func (w *weedObjects) list(parentDirectoryPath, prefix, startFrom string, inclusive bool, limit uint32) (entries []*filer_pb.Entry, isLast bool, err error) {
+
+	err = filer_pb.List(w.Client, parentDirectoryPath, prefix, func(entry *filer_pb.Entry, isLastEntry bool) error {
+		entries = append(entries, entry)
+		if isLastEntry {
+			isLast = true
+		}
+		return nil
+	}, startFrom, inclusive, limit)
+
+	if len(entries) == 0 {
+		isLast = true
+	}
+	return
+}
+
 func entryInfoToObjectInfo(bucket string, entry *filer_pb.Entry) minio.ObjectInfo {
 	return minio.ObjectInfo{
 		Bucket:  bucket,
 		Name:    entry.Name,
-		ModTime: time.Unix(entry.GetAttributes().GetMtime(), 0),
-		Size:    int64(entry.GetAttributes().GetFileSize()),
+		ModTime: time.Unix(entry.Attributes.Mtime, 0),
+		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.GetIsDirectory(),
-		AccTime: time.Unix(entry.GetAttributes().GetMtime(), 0),
+		AccTime: time.Time{},
 	}
 }
 
@@ -331,7 +327,12 @@ func (w *weedObjects) MakeBucketWithLocation(ctx context.Context, bucket string,
 }
 
 func (w *weedObjects) PutObject(ctx context.Context, bucket string, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	path := util.NewFullPath(w.weedPathJoin(bucket), object)
+	path := w.weedPathJoin(bucket, object)
+	if strings.HasSuffix(object, weedSeparator) && r.Size() == 0 {
+		if err := filer_pb.Mkdir(w.Client, BucketDir, path, nil); err != nil {
+			return minio.ObjectInfo{}, err
+		}
+	}
 	uploadURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
 	client := &http.Client{}
 	data := r.Reader
@@ -341,10 +342,11 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 	if err != nil {
 		return minio.ObjectInfo{}, err
 	}
-	_, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return minio.ObjectInfo{}, err
 	}
+	defer resp.Body.Close()
 	fi, err := w.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
 		return minio.ObjectInfo{}, err
