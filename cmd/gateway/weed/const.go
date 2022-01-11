@@ -1,5 +1,8 @@
 package weed
 
+import minio "github.com/minio/minio/cmd"
+
 const (
-	BucketDir = "/buckets"
+	BucketDir     = "/buckets"
+	weedSeparator = minio.SlashSeparator
 )
