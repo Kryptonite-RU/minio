@@ -320,6 +320,9 @@ func (w *weedObjects) MakeBucketWithLocation(ctx context.Context, bucket string,
 	if opts.LockEnabled || opts.VersioningEnabled {
 		return minio.NotImplemented{}
 	}
+	if exist, err := filer_pb.Exists(w.Client, BucketDir, bucket, true); err == nil && exist {
+		return minio.BucketExists{}
+	}
 	if err := filer_pb.Mkdir(w.Client, BucketDir, bucket, nil); err != nil {
 		return minio.ErrorRespToObjectError(err, bucket)
 	}
