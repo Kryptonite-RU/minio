@@ -371,5 +371,8 @@ func (w *weedObjects) Shutdown(ctx context.Context) error {
 }
 
 func (w *weedObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
-	return
+	return minio.StorageInfo{
+		Disks:   []madmin.Disk{},
+		Backend: madmin.BackendInfo{},
+	}, nil
 }
