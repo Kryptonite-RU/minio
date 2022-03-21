@@ -25,7 +25,7 @@
   </property>
   <property>
     <name>datanucleus.schema.autoCreateAll</name>
-    <value>true</value>
+    <value>false</value>
   </property>
   <property>
     <name>hive.metastore.schema.verification</name>
