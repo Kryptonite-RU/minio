@@ -68,11 +68,23 @@
     <value>false</value>
   </property>
   <property>
+    <name>hive.metastore.db.type</name>
+    <value>POSTGRES</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>metastore</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>metastore</value>
+  </property>
+  <property>
     <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:derby:/tmp/metastore_db;create=true</value>
+    <value>jdbc:postgresql://postgres:5432/metastore?ssl=disable</value>
   </property>
   <property>
     <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    <value>org.postgresql.Driver</value>
   </property>
 </configuration>
