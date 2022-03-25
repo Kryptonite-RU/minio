@@ -1,5 +1,5 @@
+#!connect jdbc:hive2://127.0.0.1:10000
 version: '2'
-
 services:
   master:
     image: chrislusf/seaweedfs # use a remote image
@@ -63,16 +63,26 @@ services:
       AWS_SECRET_ACCESS_KEY: minio123
     depends_on:
       - spark-master
-  minio-gateway:
+  # minio-gateway:
+  #   image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
+  #   environment:
+  #     MINIO_ROOT_USER: minio
+  #     MINIO_ROOT_PASSWORD: minio123
+  #   # network_mode: "host"
+  #   command: minio gateway weed --console-address :9093 filer:8888
+  #   ports:
+  #     - 9000:9000
+  #     - 9093:9093
+  minio-server:
     image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
     # network_mode: "host"
-    command: minio gateway weed --console-address :9093 filer:8888
+    command: minio server /tmp/ --console-address :9094 --address=:9001
     ports:
-      - 9000:9000
-      - 9093:9093
+      - 9001:9001
+      - 9094:9094
   postgres:
     image: postgres
     container_name: postgres

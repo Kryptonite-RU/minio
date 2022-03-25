@@ -139,8 +139,15 @@ func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOf
 
 func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	path := util.NewFullPath(w.weedPathJoin(bucket), object)
+
+	if strings.HasSuffix(object, weedSeparator) && !w.isObjectDir(ctx, bucket, object) {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	}
+
 	entry, err := filer_pb.GetEntry(w.Client, path)
-	if err != nil {
+	if err == filer_pb.ErrNotFound {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	} else if err != nil {
 		return objInfo, err
 	}
 
@@ -152,6 +159,18 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 		IsDir:   entry.IsDirectory,
 		AccTime: time.Time{},
 	}, nil
+}
+
+func (w *weedObjects) isObjectDir(ctx context.Context, bucket, object string) bool {
+	path := w.weedPathJoin(bucket, object)
+	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
+	if err != nil {
+		return false
+	}
+	if len(entries) == 0 {
+		return false
+	}
+	return true
 }
 
 func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
@@ -332,37 +351,41 @@ func (w *weedObjects) MakeBucketWithLocation(ctx context.Context, bucket string,
 func (w *weedObjects) PutObject(ctx context.Context, bucket string, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	path := w.weedPathJoin(bucket, object)
 	if strings.HasSuffix(object, weedSeparator) && r.Size() == 0 {
-		if err := filer_pb.Mkdir(w.Client, BucketDir, path, nil); err != nil {
+		if err := filer_pb.Mkdir(w.Client, "", path, nil); err != nil {
 			return minio.ObjectInfo{}, err
 		}
-	}
-	uploadURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
-	client := &http.Client{}
-	data := r.Reader
+	} else {
+		uploadURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
+		client := &http.Client{}
+		data := r.Reader
 
-	req, err := http.NewRequest("PUT", uploadURL, data)
+		req, err := http.NewRequest("PUT", uploadURL, data)
 
-	if err != nil {
-		return minio.ObjectInfo{}, err
+		if err != nil {
+			return minio.ObjectInfo{}, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return minio.ObjectInfo{}, err
+		}
+		defer resp.Body.Close()
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return minio.ObjectInfo{}, err
-	}
-	defer resp.Body.Close()
-	fi, err := w.GetObjectInfo(ctx, bucket, object, opts)
-	if err != nil {
-		return minio.ObjectInfo{}, err
+
+	fi, err := filer_pb.GetEntry(w.Client, util.NewFullPath(w.weedPathJoin(bucket), object))
+	if err == filer_pb.ErrNotFound {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	} else if err != nil {
+		return objInfo, err
 	}
 
 	return minio.ObjectInfo{
 		Bucket:  bucket,
 		Name:    object,
 		ETag:    r.MD5CurrentHexString(),
-		ModTime: fi.ModTime,
-		Size:    fi.Size,
-		IsDir:   fi.IsDir,
-		AccTime: fi.AccTime,
+		ModTime: time.Unix(fi.Attributes.Mtime, 0),
+		Size:    int64(fi.Attributes.FileSize),
+		IsDir:   fi.IsDirectory,
+		AccTime: time.Time{},
 	}, nil
 }
 
