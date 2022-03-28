@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/pb"
@@ -101,7 +102,8 @@ func (w *Weed) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		HTTPClient: &http.Client{
 			Transport: t,
 		},
-		Metrics: metrics,
+		Metrics:  metrics,
+		listPool: minio.NewTreeWalkPool(time.Minute * 30),
 	}
 	return &weedGateway, nil
 }
@@ -111,6 +113,7 @@ type weedObjects struct {
 	Client     *WeedClient
 	HTTPClient *http.Client
 	Metrics    *minio.BackendMetrics
+	listPool   *minio.TreeWalkPool
 }
 
 func (w *weedObjects) weedPathJoin(args ...string) string {
@@ -161,16 +164,21 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 	}, nil
 }
 
-func (w *weedObjects) isObjectDir(ctx context.Context, bucket, object string) bool {
-	path := w.weedPathJoin(bucket, object)
+func (w *weedObjects) isLeafDir(bucket, leafPath string) bool {
+	return w.isObjectDir(context.Background(), bucket, leafPath)
+}
+
+func (w *weedObjects) isLeaf(bucket, leafPath string) bool {
+	return !strings.HasSuffix(leafPath, weedSeparator)
+}
+
+func (w *weedObjects) isObjectDir(ctx context.Context, bucket, prefix string) bool {
+	path := w.weedPathJoin(bucket, prefix)
 	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
 	if err != nil {
 		return false
 	}
-	if len(entries) == 0 {
-		return false
-	}
-	return true
+	return len(entries) == 0
 }
 
 func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
@@ -236,33 +244,58 @@ func (w *weedObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continu
 }
 
 func (w *weedObjects) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
+	var mutex sync.Mutex
 
-	var objects []minio.ObjectInfo
-	path := w.weedPathJoin(bucket, prefix)
+	getObjectInfo := func(ctx context.Context, bucket, entry string) (objectInfo minio.ObjectInfo, err error) {
+		mutex.Lock()
+		defer mutex.Unlock()
 
-	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
-	if err != nil {
-		return loi, err
-	}
+		path := util.NewFullPath(w.weedPathJoin(bucket), entry)
 
-	for _, entry := range entries {
-		if prefix != "" {
-			entry.Name = prefix + entry.Name
+		ei, err := filer_pb.GetEntry(w.Client, path)
+		if err == filer_pb.ErrNotFound {
+			return objectInfo, minio.ObjectNotFound{Bucket: bucket, Object: entry}
+		} else if err != nil {
+			return objectInfo, err
 		}
-		objects = append(objects, entryInfoToObjectInfo(bucket, entry))
+		ei.Name = entry
+		objectInfo = entryInfoToObjectInfo(bucket, ei)
+
+		return objectInfo, nil
 	}
 
-	return minio.ListObjectsInfo{
-		IsTruncated: false,
-		NextMarker:  "",
-		Objects:     objects,
-		Prefixes:    []string{},
-	}, nil
+	return minio.ListObjects(ctx, w, bucket, prefix, marker, delimiter, maxKeys, w.listPool, w.listDirFactory(), w.isLeaf, w.isLeafDir, getObjectInfo, getObjectInfo)
 }
 
-func (w *weedObjects) list(parentDirectoryPath, prefix, startFrom string, inclusive bool, limit uint32) (entries []*filer_pb.Entry, isLast bool, err error) {
+func (w *weedObjects) listDirFactory() minio.ListDirFunc {
+	listDir := func(bucket, prefixDir, prefixEntry string) (emptyDir bool, entries []string, delayIsLeaf bool) {
+		path := w.weedPathJoin(bucket, prefixDir)
 
-	err = filer_pb.List(w.Client, parentDirectoryPath, prefix, func(entry *filer_pb.Entry, isLastEntry bool) error {
+		fis, _, err := w.list(path, "", "", false, math.MaxInt32)
+		if err != nil {
+			return false, entries, false
+		}
+		if len(fis) == 0 {
+			return true, nil, false
+		}
+		for _, fi := range fis {
+			if fi.IsDirectory {
+				entries = append(entries, fi.Name+weedSeparator)
+			} else {
+				entries = append(entries, fi.Name)
+			}
+		}
+
+		entries, delayIsLeaf = minio.FilterListEntries(bucket, prefixDir, entries, prefixEntry, w.isLeaf)
+		return false, entries, delayIsLeaf
+	}
+
+	return listDir
+}
+
+func (w *weedObjects) list(path, prefix, startFrom string, inclusive bool, limit uint32) (entries []*filer_pb.Entry, isLast bool, err error) {
+
+	err = filer_pb.List(w.Client, path, prefix, func(entry *filer_pb.Entry, isLastEntry bool) error {
 		entries = append(entries, entry)
 		if isLastEntry {
 			isLast = true
@@ -295,8 +328,8 @@ func (w *weedObjects) DeleteBucket(ctx context.Context, bucket string, opts mini
 }
 
 func (w *weedObjects) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
-	path := w.weedPathJoin(bucket)
-	if err := filer_pb.Remove(w.Client, path, object, true, true, true, false, nil); err != nil {
+	path := w.weedPathJoin(bucket, object)
+	if err := filer_pb.Remove(w.Client, "", path, true, true, true, false, nil); err != nil {
 		return minio.ObjectInfo{}, err
 	}
 	return minio.ObjectInfo{
@@ -349,7 +382,8 @@ func (w *weedObjects) MakeBucketWithLocation(ctx context.Context, bucket string,
 }
 
 func (w *weedObjects) PutObject(ctx context.Context, bucket string, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	path := w.weedPathJoin(bucket, object)
+	objectName := strings.TrimSuffix(object, weedSeparator)
+	path := w.weedPathJoin(bucket, objectName)
 	if strings.HasSuffix(object, weedSeparator) && r.Size() == 0 {
 		if err := filer_pb.Mkdir(w.Client, "", path, nil); err != nil {
 			return minio.ObjectInfo{}, err
@@ -370,23 +404,12 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 		}
 		defer resp.Body.Close()
 	}
-
-	fi, err := filer_pb.GetEntry(w.Client, util.NewFullPath(w.weedPathJoin(bucket), object))
-	if err == filer_pb.ErrNotFound {
-		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
-	} else if err != nil {
-		return objInfo, err
+	fi, err := w.GetObjectInfo(ctx, bucket, objectName, opts)
+	if err != nil {
+		return minio.ObjectInfo{}, err
 	}
 
-	return minio.ObjectInfo{
-		Bucket:  bucket,
-		Name:    object,
-		ETag:    r.MD5CurrentHexString(),
-		ModTime: time.Unix(fi.Attributes.Mtime, 0),
-		Size:    int64(fi.Attributes.FileSize),
-		IsDir:   fi.IsDirectory,
-		AccTime: time.Time{},
-	}, nil
+	return fi, nil
 }
 
 func (w *weedObjects) Shutdown(ctx context.Context) error {
