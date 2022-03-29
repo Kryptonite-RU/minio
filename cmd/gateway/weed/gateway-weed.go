@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -116,17 +117,6 @@ type weedObjects struct {
 	Metrics    *minio.BackendMetrics
 	listPool   *minio.TreeWalkPool
 }
-
-const (
-	// Minio meta bucket.
-	minioMetaBucket = ".minio.sys"
-
-	// Minio Tmp meta prefix.
-	minioMetaTmpBucket = minioMetaBucket + "/tmp"
-
-	// Minio reserved bucket name.
-	minioReservedBucket = "minio"
-)
 
 func (w *weedObjects) weedPathJoin(args ...string) string {
 	return minio.PathJoin(append([]string{BucketDir, weedSeparator}, args...)...)
@@ -490,25 +480,194 @@ func (w *weedObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstB
 	})
 }
 
-//func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, object string, opts minio.ObjectOptions) (uploadID string, err error) {
-//	_, err = w.clnt.Stat(w.hdfsPathJoin(bucket))
-//	if err != nil {
-//		return uploadID, hdfsToObjectErr(ctx, err, bucket)
-//	}
-//
-//	uploadID = minio.MustGetUUID()
-//	if err = n.clnt.CreateEmptyFile(n.hdfsPathJoin(minioMetaTmpBucket, uploadID)); err != nil {
-//		return uploadID, hdfsToObjectErr(ctx, err, bucket)
-//	}
-//
-//	return uploadID, nil
-//}
+func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, object string, opts minio.ObjectOptions) (uploadID string, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return uploadID, err
+	}
+	if !exists {
+		return uploadID, minio.BucketNotFound{}
+	}
 
-//func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, object string, opts minio.ObjectOptions) (uploadID string, err error) {
-//	_, err = w.GetBucketInfo(ctx, bucket)
-//	if err != nil {
-//		return uploadID, err
-//	}
-//
-//	uploadID = minio.MustGetUUID()
-//}
+	var entry = filer_pb.Entry{}
+
+	uploadID = minio.MustGetUUID()
+	if err = filer_pb.Touch(w.Client, BucketDir+minioMetaTmpBucket, uploadID, &entry); err != nil {
+		return uploadID, err
+	}
+
+	return uploadID, nil
+}
+
+func (w *weedObjects) ListMultipartUploads(ctx context.Context, bucket string, prefix string, keyMarker string, uploadIDMarker string, delimiter string, maxUploads int) (lmi minio.ListMultipartsInfo, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return lmi, err
+	}
+	if !exists {
+		return lmi, minio.BucketNotFound{}
+	}
+
+	// not implemented, return empty
+	return lmi, nil
+}
+
+func (w *weedObjects) checkUploadIDExists(ctx context.Context, bucket, object, uploadID string) (err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return minio.BucketNotFound{}
+	}
+
+	exists, err = filer_pb.Exists(w.Client, BucketDir+minioMetaTmpBucket, uploadID, false)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return minio.ObjectNotFound{}
+	}
+	return nil
+}
+
+// GetMultipartInfo returns multipart info of the uploadId of the object
+func (w *weedObjects) GetMultipartInfo(ctx context.Context, bucket, object, uploadID string, opts minio.ObjectOptions) (result minio.MultipartInfo, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return result, err
+	}
+	if !exists {
+		return result, minio.BucketNotFound{}
+	}
+
+	if err = w.checkUploadIDExists(ctx, bucket, object, uploadID); err != nil {
+		return result, err
+	}
+
+	result.Bucket = bucket
+	result.Object = object
+	result.UploadID = uploadID
+	return result, nil
+}
+
+func (w *weedObjects) ListObjectParts(ctx context.Context, bucket, object, uploadID string, partNumberMarker int, maxParts int, opts minio.ObjectOptions) (result minio.ListPartsInfo, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return result, err
+	}
+	if !exists {
+		return result, minio.BucketNotFound{}
+	}
+
+	if err = w.checkUploadIDExists(ctx, bucket, object, uploadID); err != nil {
+		return result, err
+	}
+
+	// not implemented, return empty
+	return result, nil
+}
+
+func (w *weedObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, r *minio.PutObjReader, opts minio.ObjectOptions) (info minio.PartInfo, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return info, err
+	}
+	if !exists {
+		return info, minio.BucketNotFound{}
+	}
+
+	path := minioMetaTmpBucket + uploadID
+	uploadURL := fmt.Sprintf("http://%s/%s", w.Client.option.Filer, path)
+	client := &http.Client{}
+	data := r.Reader
+
+	req, err := http.NewRequest("PUT", uploadURL, data)
+	if err != nil {
+		return minio.PartInfo{}, err
+	}
+	req.Form.Add("op", "append")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return minio.PartInfo{}, err
+	}
+
+	defer resp.Body.Close()
+
+	info.PartNumber = partID
+	info.ETag = r.MD5CurrentHexString()
+	info.LastModified = minio.UTCNow()
+	info.Size = r.Reader.Size()
+
+	return info, nil
+}
+
+func (w *weedObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject, uploadID string, partID int,
+	startOffset int64, length int64, srcInfo minio.ObjectInfo, srcOpts, dstOpts minio.ObjectOptions) (minio.PartInfo, error) {
+	return w.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.PutObjReader, dstOpts)
+}
+
+func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []minio.CompletePart, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return objInfo, err
+	}
+	if !exists {
+		return objInfo, minio.BucketNotFound{}
+	}
+
+	if err = w.checkUploadIDExists(ctx, bucket, object, uploadID); err != nil {
+		return objInfo, err
+	}
+
+	name := w.weedPathJoin(bucket, object)
+	dir := path.Dir(name)
+
+	if dir != "" {
+		if err = filer_pb.Mkdir(w.Client, "", dir, nil); err != nil {
+			return objInfo, err
+		}
+	}
+
+	//	# move(rename) "/path/to/src_file" to "/path/to/dst_file"
+	//	> curl -X POST 'http://localhost:8888/path/to/dst_file?mv.from=/path/to/src_file'
+	renameURL := fmt.Sprintf("http://%s/%s", w.Client.option.Filer, w.weedPathJoin(bucket, object))
+	data := url.Values{"mv.from": {BucketDir + minioMetaTmpBucket + uploadID}}
+
+	resp, err := http.PostForm(renameURL, data)
+	if err != nil {
+		return objInfo, err
+	}
+
+	defer resp.Body.Close()
+
+	s3MD5 := minio.ComputeCompleteMultipartMD5(parts)
+	path := util.NewFullPath(w.weedPathJoin(bucket), object)
+
+	entry, err := filer_pb.GetEntry(w.Client, path)
+	if err == filer_pb.ErrNotFound {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	} else if err != nil {
+		return objInfo, err
+	}
+
+	return minio.ObjectInfo{
+		Bucket:  bucket,
+		Name:    object,
+		ETag:    s3MD5,
+		ModTime: time.Unix(entry.Attributes.Mtime, 0),
+		Size:    int64(entry.Attributes.FileSize),
+		IsDir:   entry.IsDirectory,
+		AccTime: time.Time{},
+	}, nil
+}
+
+func (w *weedObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string, opts minio.ObjectOptions) (err error) {
+	path := w.weedPathJoin(bucket, object)
+	if err := filer_pb.Remove(w.Client, "", path, true, true, true, false, nil); err != nil {
+		return err
+	}
+	return fmt.Errorf("Multipart upload aborted")
+
+}
