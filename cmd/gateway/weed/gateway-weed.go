@@ -164,23 +164,6 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 	}, nil
 }
 
-func (w *weedObjects) isLeafDir(bucket, leafPath string) bool {
-	return w.isObjectDir(context.Background(), bucket, leafPath)
-}
-
-func (w *weedObjects) isLeaf(bucket, leafPath string) bool {
-	return !strings.HasSuffix(leafPath, weedSeparator)
-}
-
-func (w *weedObjects) isObjectDir(ctx context.Context, bucket, prefix string) bool {
-	path := w.weedPathJoin(bucket, prefix)
-	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
-	if err != nil {
-		return false
-	}
-	return len(entries) == 0
-}
-
 func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
 	var objInfo minio.ObjectInfo
 	objInfo, err = w.GetObjectInfo(ctx, bucket, object, opts)
@@ -318,6 +301,23 @@ func entryInfoToObjectInfo(bucket string, entry *filer_pb.Entry) minio.ObjectInf
 		IsDir:   entry.GetIsDirectory(),
 		AccTime: time.Time{},
 	}
+}
+
+func (w *weedObjects) isLeafDir(bucket, leafPath string) bool {
+	return w.isObjectDir(context.Background(), bucket, leafPath)
+}
+
+func (w *weedObjects) isLeaf(bucket, leafPath string) bool {
+	return !strings.HasSuffix(leafPath, weedSeparator)
+}
+
+func (w *weedObjects) isObjectDir(ctx context.Context, bucket, prefix string) bool {
+	path := w.weedPathJoin(bucket, prefix)
+	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
+	if err != nil {
+		return false
+	}
+	return len(entries) == 0
 }
 
 func (w *weedObjects) DeleteBucket(ctx context.Context, bucket string, opts minio.DeleteBucketOptions) error {
