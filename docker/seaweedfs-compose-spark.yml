@@ -1,0 +1,119 @@
+#!connect jdbc:hive2://127.0.0.1:10000
+version: '2'
+services:
+  master:
+    image: chrislusf/seaweedfs # use a remote image
+    ports:
+      - 9333:9333
+      - 19333:19333
+    command: "master -ip=master"
+  volume:
+    image: chrislusf/seaweedfs # use a remote image
+    ports:
+      - 8080:8080
+      - 18080:18080
+      - 9325:9325
+    command: 'volume -mserver="master:9333" -port=8080  -metricsPort=9325'
+    depends_on:
+      - master
+  filer:
+    image: chrislusf/seaweedfs # use a remote image
+    ports:
+      - 8888:8888
+      - 18888:18888
+      - 9326:9326
+    command: 'filer -master="master:9333"  -metricsPort=9326'
+    tty: true
+    stdin_open: true
+    depends_on:
+      - master
+      - volume
+  spark-thrift:
+    image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    entrypoint: /opt/spark/bin/spark-submit
+    environment:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    ports:
+      - 4040:4040
+      - 42000:42000
+      - 42100:42100
+      - 10000:10000
+    command: '--class org.apache.spark.sql.hive.thriftserver.HiveThriftServer2 --properties-file /etc/spark-properties/thrift-server.conf --master spark://spark-master:7077'
+    volumes: 
+      - ./thrift-server.conf:/etc/spark-properties/thrift-server.conf
+    depends_on:
+      - master
+      - volume
+      - spark-master
+      - hive-metastore
+  spark-master:
+    image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    environment:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    ports:
+      - 7077:7077
+      - 8085:8080
+  spark-worker:
+    image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    environment:
+      SPARK_MASTER_ADDRESS: spark://spark-master:7077
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    depends_on:
+      - spark-master
+  # minio-gateway:
+  #   image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
+  #   environment:
+  #     MINIO_ROOT_USER: minio
+  #     MINIO_ROOT_PASSWORD: minio123
+  #   # network_mode: "host"
+  #   command: minio gateway weed --console-address :9093 filer:8888
+  #   ports:
+  #     - 9000:9000
+  #     - 9093:9093
+  minio-server:
+    image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    # network_mode: "host"
+    command: minio server /tmp/ --console-address :9094 --address=:9001
+    ports:
+      - 9001:9001
+      - 9094:9094
+  postgres:
+    image: postgres
+    container_name: postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: Password1
+  postgres-initdb:
+    image: postgres
+    restart: always
+    entrypoint:
+      - /bin/bash
+      - -c
+      - --
+    command:
+      - psql -c "create user metastore with password 'metastore';" && psql -c "create database metastore owner metastore;"
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: Password1
+    depends_on:
+      - postgres
+  hive-metastore:
+    image: docker.kryptodev.ru/cloudservices/ubi-hive:3.1.2-metastore-006
+    environment:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    ports:
+      - 9083:9083
+    volumes: 
+      - ./hive-site.xml:/opt/hive-metastore-bin/conf/metastore-site.xml
+    depends_on:
+      - postgres-initdb
