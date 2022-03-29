@@ -312,8 +312,11 @@ func (w *weedObjects) isLeaf(bucket, leafPath string) bool {
 }
 
 func (w *weedObjects) isObjectDir(ctx context.Context, bucket, prefix string) bool {
-	path := w.weedPathJoin(bucket, prefix)
-	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
+	isdir, err := filer_pb.Exists(w.Client, w.weedPathJoin(bucket), prefix, true)
+	if !isdir || err != nil {
+		return false
+	}
+	entries, _, err := w.list(w.weedPathJoin(bucket, prefix), "", "", false, math.MaxInt32)
 	if err != nil {
 		return false
 	}
