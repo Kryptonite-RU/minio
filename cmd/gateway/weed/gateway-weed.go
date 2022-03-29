@@ -117,6 +117,17 @@ type weedObjects struct {
 	listPool   *minio.TreeWalkPool
 }
 
+const (
+	// Minio meta bucket.
+	minioMetaBucket = ".minio.sys"
+
+	// Minio Tmp meta prefix.
+	minioMetaTmpBucket = minioMetaBucket + "/tmp"
+
+	// Minio reserved bucket name.
+	minioReservedBucket = "minio"
+)
+
 func (w *weedObjects) weedPathJoin(args ...string) string {
 	return minio.PathJoin(append([]string{BucketDir, weedSeparator}, args...)...)
 }
@@ -456,9 +467,48 @@ func (w *weedObjects) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+func (w *weedObjects) LocalStorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
+	return w.StorageInfo(ctx)
+}
+
 func (w *weedObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
 	return minio.StorageInfo{
 		Disks:   []madmin.Disk{},
 		Backend: madmin.BackendInfo{},
 	}, nil
 }
+
+func (w *weedObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, srcInfo minio.ObjectInfo, srcOpts, dstOpts minio.ObjectOptions) (minio.ObjectInfo, error) {
+	cpSrcDstSame := minio.IsStringEqual(w.weedPathJoin(srcBucket, srcObject), w.weedPathJoin(dstBucket, dstObject))
+	if cpSrcDstSame {
+		return w.GetObjectInfo(ctx, srcBucket, srcObject, minio.ObjectOptions{})
+	}
+
+	return w.PutObject(ctx, dstBucket, dstObject, srcInfo.PutObjReader, minio.ObjectOptions{
+		ServerSideEncryption: dstOpts.ServerSideEncryption,
+		UserDefined:          srcInfo.UserDefined,
+	})
+}
+
+//func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, object string, opts minio.ObjectOptions) (uploadID string, err error) {
+//	_, err = w.clnt.Stat(w.hdfsPathJoin(bucket))
+//	if err != nil {
+//		return uploadID, hdfsToObjectErr(ctx, err, bucket)
+//	}
+//
+//	uploadID = minio.MustGetUUID()
+//	if err = n.clnt.CreateEmptyFile(n.hdfsPathJoin(minioMetaTmpBucket, uploadID)); err != nil {
+//		return uploadID, hdfsToObjectErr(ctx, err, bucket)
+//	}
+//
+//	return uploadID, nil
+//}
+
+//func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, object string, opts minio.ObjectOptions) (uploadID string, err error) {
+//	_, err = w.GetBucketInfo(ctx, bucket)
+//	if err != nil {
+//		return uploadID, err
+//	}
+//
+//	uploadID = minio.MustGetUUID()
+//}
