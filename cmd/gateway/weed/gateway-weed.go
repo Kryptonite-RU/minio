@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -327,6 +328,15 @@ func (w *weedObjects) isObjectDir(ctx context.Context, bucket, prefix string) bo
 	return len(entries) == 0
 }
 
+func (w *weedObjects) isEmptyPath(ctx context.Context, path string) bool {
+
+	entries, _, err := w.list(path, "", "", false, math.MaxInt32)
+	if err != nil {
+		return false
+	}
+	return len(entries) == 0
+}
+
 func (w *weedObjects) DeleteBucket(ctx context.Context, bucket string, opts minio.DeleteBucketOptions) error {
 	if err := filer_pb.Remove(w.Client, BucketDir, bucket, true, true, true, false, nil); err != nil {
 		return err
@@ -335,17 +345,37 @@ func (w *weedObjects) DeleteBucket(ctx context.Context, bucket string, opts mini
 }
 
 func (w *weedObjects) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	path := w.weedPathJoin(bucket, object)
 	if strings.HasSuffix(object, weedSeparator) && !w.isObjectDir(ctx, bucket, object) {
 		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
 	}
-	if err := filer_pb.Remove(w.Client, "", path, true, true, true, false, nil); err != nil {
-		return minio.ObjectInfo{}, err
+	if err := w.deleteObject(w.weedPathJoin(bucket), w.weedPathJoin(bucket, object)); err != nil {
+		return objInfo, err
 	}
 	return minio.ObjectInfo{
 		Bucket: bucket,
 		Name:   object,
 	}, nil
+}
+
+func (w *weedObjects) deleteObject(basePath, deletePath string) error {
+	if basePath == deletePath {
+		return nil
+	}
+
+	if err := filer_pb.Remove(w.Client, "", deletePath, true, true, true, false, nil); err != nil {
+		return err
+	}
+
+	deletePath = strings.TrimSuffix(deletePath, weedSeparator)
+	deletePath = path.Dir(deletePath)
+
+	if !w.isEmptyPath(context.Background(), deletePath+weedSeparator) {
+		return nil
+	}
+
+	w.deleteObject(basePath, deletePath)
+
+	return nil
 }
 
 func (w *weedObjects) DeleteObjects(ctx context.Context, bucket string, objects []minio.ObjectToDelete, opts minio.ObjectOptions) ([]minio.DeletedObject, []error) {
