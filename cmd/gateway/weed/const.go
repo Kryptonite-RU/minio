@@ -7,6 +7,9 @@ const (
 	weedSeparator = minio.SlashSeparator
 
 	minioMetaBucket     = ".minio.sys"
-	minioMetaTmpBucket  = minioMetaBucket + "/tmp"
+	minioMetaTmpDir     = "tmp"
+	minioMetaTmpBucket  = minioMetaBucket + "/" + minioMetaTmpDir
 	minioReservedBucket = "minio"
+
+	multipartUploadDir = BucketDir + "/" + minioMetaTmpBucket
 )
