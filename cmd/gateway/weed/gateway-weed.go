@@ -154,6 +154,10 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 		return objInfo, err
 	}
 
+	if !strings.HasSuffix(object, weedSeparator) && entry.IsDirectory {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	}
+
 	return minio.ObjectInfo{
 		Bucket:  bucket,
 		Name:    object,
@@ -330,8 +334,11 @@ func (w *weedObjects) DeleteBucket(ctx context.Context, bucket string, opts mini
 	return nil
 }
 
-func (w *weedObjects) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
+func (w *weedObjects) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	path := w.weedPathJoin(bucket, object)
+	if strings.HasSuffix(object, weedSeparator) && !w.isObjectDir(ctx, bucket, object) {
+		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
+	}
 	if err := filer_pb.Remove(w.Client, "", path, true, true, true, false, nil); err != nil {
 		return minio.ObjectInfo{}, err
 	}
@@ -407,7 +414,7 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 		}
 		defer resp.Body.Close()
 	}
-	fi, err := w.GetObjectInfo(ctx, bucket, objectName, opts)
+	fi, err := w.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
 		return minio.ObjectInfo{}, err
 	}
