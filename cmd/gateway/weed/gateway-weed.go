@@ -453,12 +453,42 @@ func (w *weedObjects) NewMultipartUpload(ctx context.Context, bucket string, obj
 		return uploadID, minio.BucketNotFound{}
 	}
 
-	var entry = filer_pb.Entry{}
-
-	uploadID = minio.MustGetUUID()
-	if err = filer_pb.Touch(w.Client, BucketDir+minioMetaTmpBucket, uploadID, &entry); err != nil {
+	minioMetaTmpBucketExists, err := filer_pb.Exists(w.Client, w.weedPathJoin(minioMetaBucket), minioMetaTmpDir, true)
+	if err != nil {
 		return uploadID, err
 	}
+	if !minioMetaTmpBucketExists {
+		if err = filer_pb.Mkdir(w.Client, w.weedPathJoin(minioMetaBucket), minioMetaTmpDir, nil); err != nil {
+			return uploadID, err
+		}
+	}
+
+	//var entry = filer_pb.Entry{}
+
+	uploadID = minio.MustGetUUID()
+	//entry.Name = uploadID
+	////err = filer_pb.MkFile(w.Client, multipartUploadDir, uploadID, nil, nil)
+
+	//if err = filer_pb.Touch(w.Client, multipartUploadDir, uploadID, &entry); err != nil {
+	//	return uploadID, err
+	//}
+	//tmpObject := strings.NewReader("")
+	//_, err = w.PutObject(ctx, minioMetaBucket, fmt.Sprintf("%s/%s", minioMetaTmpDir, uploadID), tmpObject, opts)
+	//if err != nil {
+	//	return "", err
+	//}
+	path := fmt.Sprintf("%s/%s", w.weedPathJoin(minioMetaTmpBucket), uploadID)
+	uploadURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
+	client := &http.Client{}
+	req, err := http.NewRequest("PUT", uploadURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
 
 	return uploadID, nil
 }
@@ -485,7 +515,7 @@ func (w *weedObjects) checkUploadIDExists(ctx context.Context, bucket, object, u
 		return minio.BucketNotFound{}
 	}
 
-	exists, err = filer_pb.Exists(w.Client, BucketDir+minioMetaTmpBucket, uploadID, false)
+	exists, err = filer_pb.Exists(w.Client, multipartUploadDir, uploadID, false)
 	if err != nil {
 		return err
 	}
@@ -541,7 +571,7 @@ func (w *weedObjects) PutObjectPart(ctx context.Context, bucket, object, uploadI
 		return info, minio.BucketNotFound{}
 	}
 
-	path := minioMetaTmpBucket + uploadID
+	path := fmt.Sprintf("%s/%s", multipartUploadDir, uploadID)
 	uploadURL := fmt.Sprintf("http://%s/%s", w.Client.option.Filer, path)
 	client := &http.Client{}
 	data := r.Reader
@@ -597,7 +627,7 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 	//	# move(rename) "/path/to/src_file" to "/path/to/dst_file"
 	//	> curl -X POST 'http://localhost:8888/path/to/dst_file?mv.from=/path/to/src_file'
 	renameURL := fmt.Sprintf("http://%s/%s", w.Client.option.Filer, w.weedPathJoin(bucket, object))
-	data := url.Values{"mv.from": {BucketDir + minioMetaTmpBucket + uploadID}}
+	data := url.Values{"mv.from": {fmt.Sprintf("%s/%s", multipartUploadDir, uploadID)}}
 
 	resp, err := http.PostForm(renameURL, data)
 	if err != nil {
