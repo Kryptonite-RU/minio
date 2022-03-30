@@ -3,12 +3,14 @@ version: '2'
 services:
   master:
     image: chrislusf/seaweedfs # use a remote image
+    restart: always
     ports:
       - 9333:9333
       - 19333:19333
     command: "master -ip=master"
   volume:
     image: chrislusf/seaweedfs # use a remote image
+    restart: always
     ports:
       - 8080:8080
       - 18080:18080
@@ -18,6 +20,7 @@ services:
       - master
   filer:
     image: chrislusf/seaweedfs # use a remote image
+    restart: always
     ports:
       - 8888:8888
       - 18888:18888
@@ -28,8 +31,17 @@ services:
     depends_on:
       - master
       - volume
+  s3-init:
+    image: curlimages/curl
+    restart: on-failure
+    command:  'curl -X POST filer:8888/buckets/data-warehouse/'
+    depends_on: 
+      - filer
+      - master
+      - volume
   spark-thrift:
     image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    restart: always
     entrypoint: /opt/spark/bin/spark-submit
     environment:
       AWS_ACCESS_KEY_ID: minio
@@ -43,12 +55,12 @@ services:
     volumes: 
       - ./thrift-server.conf:/etc/spark-properties/thrift-server.conf
     depends_on:
-      - master
-      - volume
       - spark-master
       - hive-metastore
+      - s3-init
   spark-master:
     image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    restart: always
     environment:
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio123
@@ -57,6 +69,7 @@ services:
       - 8085:8080
   spark-worker:
     image: docker.kryptodev.ru/spark/spark-base-py36:3.2.1-hadoop-3.2.2-5
+    restart: always
     environment:
       SPARK_MASTER_ADDRESS: spark://spark-master:7077
       AWS_ACCESS_KEY_ID: minio
@@ -73,16 +86,16 @@ services:
   #   ports:
   #     - 9000:9000
   #     - 9093:9093
-  minio-server:
-    image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
-    # network_mode: "host"
-    command: minio server /tmp/ --console-address :9094 --address=:9001
-    ports:
-      - 9001:9001
-      - 9094:9094
+  # minio-server:
+  #   image: ghcr.io/kryptonite-ru/minio:0.0.1-kryptonite
+  #   environment:
+  #     MINIO_ROOT_USER: minio
+  #     MINIO_ROOT_PASSWORD: minio123
+  #   # network_mode: "host"
+  #   command: minio server /tmp/ --console-address :9093 --address=:9000
+  #   ports:
+  #     - 9000:9000
+  #     - 9093:9093
   postgres:
     image: postgres
     container_name: postgres
@@ -93,7 +106,7 @@ services:
       POSTGRES_PASSWORD: Password1
   postgres-initdb:
     image: postgres
-    restart: always
+    restart: on-failure
     entrypoint:
       - /bin/bash
       - -c
@@ -108,6 +121,7 @@ services:
       - postgres
   hive-metastore:
     image: docker.kryptodev.ru/cloudservices/ubi-hive:3.1.2-metastore-006
+    restart: always
     environment:
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio123
@@ -116,4 +130,6 @@ services:
     volumes: 
       - ./hive-site.xml:/opt/hive-metastore-bin/conf/metastore-site.xml
     depends_on:
+      - filer
       - postgres-initdb
+      - s3-init
