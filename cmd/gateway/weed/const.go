@@ -6,10 +6,5 @@ const (
 	BucketDir     = "/buckets"
 	weedSeparator = minio.SlashSeparator
 
-	minioMetaBucket     = ".minio.sys"
-	minioMetaTmpDir     = "tmp"
-	minioMetaTmpBucket  = minioMetaBucket + "/" + minioMetaTmpDir
-	minioReservedBucket = "minio"
-
-	multipartUploadDir = BucketDir + "/" + minioMetaTmpBucket
+	multipartUploadDir = ".uploads"
 )
