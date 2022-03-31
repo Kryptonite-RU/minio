@@ -615,46 +615,39 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 		return objInfo, err
 	}
 
-	//	name := w.weedPathJoin(bucket, object)
-	//	dir := path.Dir(name)
-	//
-	//	if dir != "" {
-	//		if err = filer_pb.Mkdir(w.Client, "", dir, nil); err != nil {
-	//			return objInfo, err
-	//		}
-	//	}
-	//
-	//	//	# move(rename) "/path/to/src_file" to "/path/to/dst_file"
-	//	//	> curl -X POST 'http://localhost:8888/path/to/dst_file?mv.from=/path/to/src_file'
-	//	renameURL := fmt.Sprintf("http://%s/%s", w.Client.option.Filer, w.weedPathJoin(bucket, object))
-	//	data := url.Values{"mv.from": {fmt.Sprintf("%s/%s", multipartUploadDir, uploadID)}}
-	//
-	//	resp, err := http.PostForm(renameURL, data)
-	//	if err != nil {
-	//		return objInfo, err
-	//	}
-	//
-	//	defer resp.Body.Close()
-	//
-	//	s3MD5 := minio.ComputeCompleteMultipartMD5(parts)
-	//	path := util.NewFullPath(w.weedPathJoin(bucket), object)
-	//
-	//	entry, err := filer_pb.GetEntry(w.Client, path)
-	//	if err == filer_pb.ErrNotFound {
-	//		return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
-	//	} else if err != nil {
-	//		return objInfo, err
-	//	}
-	//
-	//	return minio.ObjectInfo{
-	//		Bucket:  bucket,
-	//		Name:    object,
-	//		ETag:    s3MD5,
-	//		ModTime: time.Unix(entry.Attributes.Mtime, 0),
-	//		Size:    int64(entry.Attributes.FileSize),
-	//		IsDir:   entry.IsDirectory,
-	//		AccTime: time.Time{},
-	//	}, nil
+	partsPath := w.weedPathJoin(bucket, multipartUploadDir, uploadID)
+	var finalParts []*filer_pb.FileChunk
+	var offset int64
+
+	entries, _, err := w.list(partsPath, "", "", false, math.MaxInt32)
+	if err != nil {
+		return objInfo, err
+	}
+
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name, ".part") && !entry.IsDirectory {
+			for _, chunk := range entry.Chunks {
+				p := &filer_pb.FileChunk{
+					FileId:    chunk.GetFileIdString(),
+					Offset:    offset,
+					Size:      chunk.Size,
+					Mtime:     chunk.Mtime,
+					CipherKey: chunk.CipherKey,
+					ETag:      chunk.ETag,
+				}
+				finalParts = append(finalParts, p)
+				offset += int64(chunk.Size)
+			}
+		}
+	}
+	if err = filer_pb.MkFile(w.Client, w.weedPathJoin(bucket), object, finalParts, nil); err != nil {
+		return objInfo, err
+	}
+
+	objInfo, err = w.GetObjectInfo(ctx, bucket, object, opts)
+	if err != nil {
+		return objInfo, err
+	}
 	return objInfo, nil
 }
 
