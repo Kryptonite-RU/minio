@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
