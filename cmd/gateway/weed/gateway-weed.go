@@ -8,6 +8,8 @@ import (
 	"math"
 	"net/http"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -602,6 +604,20 @@ func (w *weedObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, 
 	return w.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.PutObjReader, dstOpts)
 }
 
+func findByPartNumber(fileName string, parts []minio.CompletePart) (etag string, found bool) {
+	partNumber, formatErr := strconv.Atoi(strings.TrimSuffix(fileName, ".part"))
+	if formatErr != nil {
+		return
+	}
+	x := sort.Search(len(parts), func(i int) bool {
+		return parts[i].PartNumber >= partNumber
+	})
+	if parts[x].PartNumber != partNumber {
+		return
+	}
+	return parts[x].ETag, true
+}
+
 func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []minio.CompletePart, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
 	if err != nil {
@@ -619,13 +635,29 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 	var finalParts []*filer_pb.FileChunk
 	var offset int64
 
+	completedParts := parts
+	sort.Slice(completedParts, func(i, j int) bool {
+		return completedParts[i].PartNumber < completedParts[j].PartNumber
+	})
+
 	entries, _, err := w.list(partsPath, "", "", false, math.MaxInt32)
+
+	sort.Slice(entries, func(i, j int) bool {
+		entI, _ := strconv.Atoi(strings.TrimSuffix(entries[i].Name, ".part"))
+		entJ, _ := strconv.Atoi(strings.TrimSuffix(entries[j].Name, ".part"))
+		return entI < entJ
+	})
+
 	if err != nil {
 		return objInfo, err
 	}
 
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name, ".part") && !entry.IsDirectory {
+			_, found := findByPartNumber(entry.Name, completedParts)
+			if !found {
+				continue
+			}
 			for _, chunk := range entry.Chunks {
 				p := &filer_pb.FileChunk{
 					FileId:    chunk.GetFileIdString(),
@@ -644,11 +676,19 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 		return objInfo, err
 	}
 
-	objInfo, err = w.GetObjectInfo(ctx, bucket, object, opts)
+	entry, err := filer_pb.GetEntry(w.Client, util.FullPath(w.weedPathJoin(bucket, object)))
 	if err != nil {
 		return objInfo, err
 	}
-	return objInfo, nil
+
+	return minio.ObjectInfo{
+		Bucket:  bucket,
+		Name:    object,
+		ModTime: time.Unix(entry.Attributes.Mtime, 0),
+		Size:    int64(entry.Attributes.FileSize),
+		IsDir:   entry.IsDirectory,
+		AccTime: time.Time{},
+	}, nil
 }
 
 func (w *weedObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string, opts minio.ObjectOptions) (err error) {
