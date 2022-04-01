@@ -192,6 +192,7 @@ func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string,
 	// Setup cleanup function to cause the above go-routine to
 	// exit in case of partial read
 	pipeCloser := func() { pr.Close() }
+
 	return minio.NewGetObjectReaderFromReader(pr, objInfo, opts, pipeCloser)
 }
 
@@ -672,14 +673,21 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 			}
 		}
 	}
-	if err = filer_pb.MkFile(w.Client, w.weedPathJoin(bucket), object, finalParts, nil); err != nil {
-		return objInfo, err
-	}
+	err = filer_pb.MkFile(w.Client, w.weedPathJoin(bucket), object, finalParts, func(entry *filer_pb.Entry) {
+		entry.Attributes.FileSize = uint64(offset)
+	})
 
-	entry, err := filer_pb.GetEntry(w.Client, util.FullPath(w.weedPathJoin(bucket, object)))
 	if err != nil {
 		return objInfo, err
 	}
+	fullPath := util.FullPath(w.weedPathJoin(bucket, object))
+
+	entry, err := filer_pb.GetEntry(w.Client, fullPath)
+	if err != nil {
+		return objInfo, err
+	}
+
+	_ = filer_pb.Remove(w.Client, w.weedPathJoin(bucket, multipartUploadDir), uploadID, true, true, true, false, nil)
 
 	return minio.ObjectInfo{
 		Bucket:  bucket,
@@ -692,8 +700,8 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 }
 
 func (w *weedObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string, opts minio.ObjectOptions) (err error) {
-	path := w.weedPathJoin(bucket, object)
-	if err := filer_pb.Remove(w.Client, "", path, true, true, true, false, nil); err != nil {
+	path := w.weedPathJoin(bucket, multipartUploadDir)
+	if err := filer_pb.Remove(w.Client, path, uploadID, true, true, true, false, nil); err != nil {
 		return err
 	}
 	return fmt.Errorf("Multipart upload aborted")
