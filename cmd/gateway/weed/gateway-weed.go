@@ -168,6 +168,7 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.IsDirectory,
 		AccTime: time.Time{},
+		ETag:    defaultEtag,
 	}, nil
 }
 
@@ -450,6 +451,7 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 	if err != nil {
 		return minio.ObjectInfo{}, err
 	}
+	fi.ETag = r.MD5CurrentHexString()
 
 	return fi, nil
 }
