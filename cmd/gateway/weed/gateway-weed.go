@@ -1,7 +1,7 @@
 package weed
 
 import (
-	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -123,23 +123,90 @@ func (w *weedObjects) weedPathJoin(args ...string) string {
 	return minio.PathJoin(append([]string{BucketDir, weedSeparator}, args...)...)
 }
 
-func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, opts minio.ObjectOptions) error {
+func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, opts minio.ObjectOptions, objInfo *minio.ObjectInfo) error {
+	// If the context has already expired, return immediately without making a call.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if startOffset < 0 && length >= 0 {
+		return fmt.Errorf("storage: invalid offset %d < 0 requires negative length", startOffset)
+	}
+
+	fullFile := startOffset == 0 && length == objInfo.Size
+	start := startOffset
+
 	path := util.NewFullPath(w.weedPathJoin(bucket), key)
 	destURL := fmt.Sprintf("http://%s%s", w.Client.option.Filer, path)
-	resp, err := http.Get(destURL)
+
+	req, err := http.NewRequest(http.MethodGet, destURL, nil)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(resp.Body)
+
+	req = req.WithContext(ctx)
+
+	if fullFile {
+		req.Header.Add("Accept-Encoding", "gzip")
+	} else {
+		if length < 0 && start < 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d", start))
+		} else if length < 0 && start > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
+		} else if length > 0 {
+			// The end character isn't affected by how many bytes we've seen.
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, start+length-1))
+		}
+	}
+
+	res, err := w.HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
-	rd := bytes.NewReader(bodyBytes)
-	_, err = io.Copy(writer, io.NewSectionReader(rd, startOffset, length))
+
+	if fullFile {
+		if res.StatusCode >= http.StatusBadRequest {
+			res.Body.Close()
+			return fmt.Errorf("%s: %s", destURL, res.Status)
+		}
+	} else {
+		if res.StatusCode == http.StatusNotFound {
+			res.Body.Close()
+			return fmt.Errorf("storage: object doesn't exist")
+		}
+
+		if res.StatusCode < 200 || res.StatusCode > 299 {
+			res.Body.Close()
+			return fmt.Errorf("%s: %s", destURL, res.Status)
+		}
+
+		partialContentNotSatisfied := start > 0 && length != 0 && res.StatusCode != http.StatusPartialContent
+
+		if partialContentNotSatisfied {
+			res.Body.Close()
+			return fmt.Errorf("storage: partial request not satisfied")
+		}
+	}
+
+	var reader io.ReadCloser
+	contentEncoding := res.Header.Get("Content-Encoding")
+	switch contentEncoding {
+	case "gzip":
+		reader, err = gzip.NewReader(res.Body)
+		if err != nil {
+			res.Body.Close()
+			return err
+		}
+	default:
+		reader = res.Body
+	}
+	defer reader.Close()
+
+	_, err = io.Copy(writer, reader)
 	if err == io.ErrClosedPipe {
 		err = nil
 	}
+
 	return nil
 }
 
@@ -173,20 +240,20 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 }
 
 func (w *weedObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
-	var objInfo minio.ObjectInfo
-	objInfo, err = w.GetObjectInfo(ctx, bucket, object, opts)
+	objInfo, err := w.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
 		return nil, err
 	}
-	var startOffset, length int64
-	startOffset, length, err = rs.GetOffsetLength(objInfo.Size)
+
+	startOffset, length, err := rs.GetOffsetLength(objInfo.Size)
 	if err != nil {
 		return nil, err
 	}
 
 	pr, pw := io.Pipe()
 	go func() {
-		nerr := w.getObject(ctx, bucket, object, startOffset, length, pw, objInfo.ETag, opts)
+		nerr := w.getObject(ctx, bucket, object, startOffset, length, pw, objInfo.ETag, opts, &objInfo)
+
 		pw.CloseWithError(nerr)
 	}()
 
