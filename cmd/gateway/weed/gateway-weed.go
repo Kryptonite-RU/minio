@@ -528,17 +528,6 @@ func (w *weedObjects) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (w *weedObjects) LocalStorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
-	return w.StorageInfo(ctx)
-}
-
-func (w *weedObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
-	return minio.StorageInfo{
-		Disks:   []madmin.Disk{},
-		Backend: madmin.BackendInfo{},
-	}, nil
-}
-
 func (w *weedObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, srcInfo minio.ObjectInfo, srcOpts, dstOpts minio.ObjectOptions) (minio.ObjectInfo, error) {
 	cpSrcDstSame := minio.IsStringEqual(w.weedPathJoin(srcBucket, srcObject), w.weedPathJoin(dstBucket, dstObject))
 	if cpSrcDstSame {

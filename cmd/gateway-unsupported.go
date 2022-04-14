@@ -47,6 +47,12 @@ func (a GatewayUnsupported) LocalStorageInfo(ctx context.Context) (StorageInfo, 
 	return StorageInfo{}, nil
 }
 
+// BackendDataUsageInfo returns data info
+func (a GatewayUnsupported) BackendDataUsageInfo(ctx context.Context, objAPI ObjectLayer) (DataUsageInfo, error) {
+	logger.CriticalIf(ctx, errors.New("not implemeted"))
+	return DataUsageInfo{}, nil
+}
+
 // NSScanner - scanner is not implemented for gateway
 func (a GatewayUnsupported) NSScanner(ctx context.Context, bf *bloomFilter, updates chan<- DataUsageInfo, wantCycle uint32) error {
 	logger.CriticalIf(ctx, errors.New("not implemented"))

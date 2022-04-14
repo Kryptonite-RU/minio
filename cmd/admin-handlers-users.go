@@ -1070,7 +1070,7 @@ func (a adminAPIHandlers) AccountInfoHandler(w http.ResponseWriter, r *http.Requ
 
 	var dataUsageInfo DataUsageInfo
 	var err error
-	if !globalIsGateway {
+	if !globalIsGateway || globalGatewayName == WeedBackendGateway {
 		// Load the latest calculated data usage
 		dataUsageInfo, err = loadDataUsageFromBackend(ctx, objectAPI)
 		if err != nil {
