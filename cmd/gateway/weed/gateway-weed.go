@@ -29,13 +29,15 @@ func init() {
   {{.HelpName}} - {{.Usage}}
 
 USAGE:
-  {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} [WEED-MASTER]
+  {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} FILER MASTER
 {{if .VisibleFlags}}
 FLAGS:
   {{range .VisibleFlags}}{{.}}
   {{end}}{{end}}
-WEED-MASTER:
-  seaweedfs server master uri.
+FILER:
+  seaweedfs filer endpoint ADDRESS:PORT
+MASTER:
+  seaweedfs master endpoint ADDRESS:PORT
 
 EXAMPLES:
   1. Start minio gateway server for SEAWEEDFS backend
@@ -66,15 +68,16 @@ EXAMPLES:
 
 func WeedGatewayMain(ctx *cli.Context) {
 	args := ctx.Args()
-	if !ctx.Args().Present() {
-		args = cli.Args{"127.0.0.1:8888"}
-	}
 
-	minio.StartGateway(ctx, &Weed{filer: args.First()})
+	if args.Get(1) == "" {
+		cli.ShowCommandHelpAndExit(ctx, ctx.Command.Name, 1)
+	}
+	minio.StartGateway(ctx, &Weed{filer: args.First(), master: args.Get(1)})
 }
 
 type Weed struct {
-	filer string
+	filer  string
+	master string
 }
 
 func (w *Weed) Name() string {
@@ -91,6 +94,7 @@ func (w *Weed) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	weedOptions := &WeedOptions{
 		Filer:          pb.ServerAddress(w.filer),
+		Master:         pb.ServerAddress(w.master),
 		GrpcDialOption: grpc.WithInsecure(),
 	}
 

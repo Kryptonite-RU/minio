@@ -8,6 +8,7 @@ import (
 
 type WeedOptions struct {
 	Filer          pb.ServerAddress
+	Master         pb.ServerAddress
 	GrpcDialOption grpc.DialOption
 }
 
