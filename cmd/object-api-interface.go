@@ -170,6 +170,7 @@ type ObjectLayer interface {
 	BackendInfo() madmin.BackendInfo
 	StorageInfo(ctx context.Context) (StorageInfo, []error)
 	LocalStorageInfo(ctx context.Context) (StorageInfo, []error)
+	BackendDataUsageInfo(ctx context.Context, objAPI ObjectLayer) (DataUsageInfo, error)
 
 	// Bucket operations.
 	MakeBucketWithLocation(ctx context.Context, bucket string, opts BucketOptions) error
