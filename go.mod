@@ -256,4 +256,4 @@ require (
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
-replace github.com/minio/console => github.com/Kryptonite-RU/minio-console v0.13.4-0.20220413131705-a52a966addfc
+replace github.com/minio/console => github.com/Kryptonite-RU/minio-console v0.13.4-0.20220415083740-865dcd17a233
