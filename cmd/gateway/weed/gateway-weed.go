@@ -14,13 +14,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/golang/glog"
 	"github.com/minio/cli"
 	"github.com/minio/madmin-go"
 	"github.com/minio/minio-go/v6/pkg/s3utils"
 	minio "github.com/minio/minio/cmd"
+	"github.com/minio/minio/pkg/util/mem"
 	"google.golang.org/grpc"
 )
 
@@ -206,8 +209,12 @@ func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOf
 	}
 	defer reader.Close()
 
-	_, err = io.Copy(writer, reader)
-	if err == io.ErrClosedPipe {
+	// Используем для передачи не стандартный буфер
+	buf := mem.Allocate(128 * 1024)
+	defer mem.Free(buf)
+
+	if n, err := io.CopyBuffer(writer, reader, buf); err == io.ErrClosedPipe {
+		glog.V(1).Infof("written %d bytes: %v", n, err)
 		err = nil
 	}
 
@@ -239,7 +246,7 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.IsDirectory,
 		AccTime: time.Time{},
-		ETag:    defaultEtag,
+		ETag:    filer.ETag(entry),
 	}, nil
 }
 
@@ -380,6 +387,7 @@ func entryInfoToObjectInfo(bucket string, entry *filer_pb.Entry) minio.ObjectInf
 		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.GetIsDirectory(),
 		AccTime: time.Time{},
+		ETag:    filer.ETag(entry),
 	}
 }
 
@@ -508,7 +516,7 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 		client := &http.Client{}
 		data := r.Reader
 
-		req, err := http.NewRequest("PUT", uploadURL, data)
+		req, err := http.NewRequest(http.MethodPut, uploadURL, data)
 
 		if err != nil {
 			return minio.ObjectInfo{}, err
@@ -758,6 +766,7 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 		Size:    int64(entry.Attributes.FileSize),
 		IsDir:   entry.IsDirectory,
 		AccTime: time.Time{},
+		ETag:    filer.ETag(entry),
 	}, nil
 }
 
