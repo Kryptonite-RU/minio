@@ -92,7 +92,9 @@ func (w *Weed) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		Transport: minio.NewGatewayHTTPTransport(),
 		Metrics:   metrics,
 	}
-	masterClient := wdclient.NewMasterClient(grpc.WithInsecure(), "client", pb.ServerAddress(w.filer), "", pb.ServerAddresses(w.masters).ToAddresses())
+	masterClient := wdclient.NewMasterClient(grpc.WithInsecure(), "client", "", "", pb.ServerAddresses(w.masters).ToAddresses())
+	go masterClient.KeepConnectedToMaster()
+	masterClient.WaitUntilConnected()
 
 	weedOptions := &WeedOptions{
 		Filer:          pb.ServerAddress(w.filer),
