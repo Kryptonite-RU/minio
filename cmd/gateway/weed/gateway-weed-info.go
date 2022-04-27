@@ -32,7 +32,7 @@ func (w *weedObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, er
 
 func (w *weedObjects) listCollectionNames() (collections []string, err error) {
 	var resp *master_pb.CollectionListResponse
-	err = pb.WithMasterClient(false, w.Client.option.Master, w.Client.option.GrpcDialOption, func(client master_pb.SeaweedClient) error {
+	err = pb.WithMasterClient(false, w.Client.option.MasterClient.GetMaster(), w.Client.option.GrpcDialOption, func(client master_pb.SeaweedClient) error {
 		resp, err = client.CollectionList(context.Background(), &master_pb.CollectionListRequest{
 			IncludeNormalVolumes: true,
 			IncludeEcVolumes:     true,
@@ -52,7 +52,7 @@ func (w *weedObjects) listCollectionNames() (collections []string, err error) {
 
 func (w *weedObjects) collectTopologyInfo() (topoInfo *master_pb.TopologyInfo, volumeSizeLimitMb uint64, err error) {
 	var resp *master_pb.VolumeListResponse
-	err = pb.WithMasterClient(false, w.Client.option.Master, w.Client.option.GrpcDialOption, func(client master_pb.SeaweedClient) error {
+	err = pb.WithMasterClient(false, w.Client.option.MasterClient.GetMaster(), w.Client.option.GrpcDialOption, func(client master_pb.SeaweedClient) error {
 		resp, err = client.VolumeList(context.Background(), &master_pb.VolumeListRequest{})
 		return err
 	})

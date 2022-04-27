@@ -1,0 +1,51 @@
+#!connect jdbc:hive2://127.0.0.1:10000
+version: '2'
+services:
+  master-1:
+    image: chrislusf/seaweedfs:2.93_large_disk # use a remote image
+    restart: always
+    ports:
+      - 9333:9333
+      - 19333:19333
+    command: "master -ip=master-1 -peers=master-1:9333,master-2:9333,master-3:9333"
+  master-2:
+    image: chrislusf/seaweedfs:2.93_large_disk # use a remote image
+    restart: always
+    ports:
+      - 9334:9333
+      - 19334:19333
+    command: "master -ip=master-2 -peers=master-1:9333,master-2:9333,master-3:9333"
+  master-3:
+    image: chrislusf/seaweedfs:2.93_large_disk # use a remote image
+    restart: always
+    ports:
+      - 9335:9333
+      - 19335:19333
+    command: "master -ip=master-3 -peers=master-1:9333,master-2:9333,master-3:9333"
+  volume:
+    image: chrislusf/seaweedfs:2.93_large_disk # use a remote image
+    restart: always
+    ports:
+      - 8080:8080
+      - 18080:18080
+      - 9325:9325
+    command: 'volume -mserver="master-1:9333,master-2:9333,master-3:9333" -port=8080  -metricsPort=9325'
+    depends_on:
+      - master-1
+      - master-2
+      - master-3
+  filer:
+    image: chrislusf/seaweedfs:2.93_large_disk # use a remote image
+    restart: always
+    ports:
+      - 8888:8888
+      - 18888:18888
+      - 9326:9326
+    command: 'filer -master="master-1:9333,master-2:9333,master-3:9333"  -metricsPort=9326'
+    tty: true
+    stdin_open: true
+    depends_on:
+      - master-1
+      - master-2
+      - master-3
+      - volume

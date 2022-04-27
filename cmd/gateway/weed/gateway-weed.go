@@ -17,6 +17,7 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/chrislusf/seaweedfs/weed/wdclient"
 	"github.com/minio/cli"
 	"github.com/minio/madmin-go"
 	"github.com/minio/minio-go/v6/pkg/s3utils"
@@ -36,8 +37,8 @@ FLAGS:
   {{end}}{{end}}
 FILER:
   seaweedfs filer endpoint ADDRESS:PORT
-MASTER:
-  seaweedfs master endpoint ADDRESS:PORT
+MASTERS:
+  seaweedfs masters list MASTER1:PORT,MASTER2:PORT,MASTER3:PORT
 
 EXAMPLES:
   1. Start minio gateway server for SEAWEEDFS backend
@@ -72,12 +73,12 @@ func WeedGatewayMain(ctx *cli.Context) {
 	if args.Get(1) == "" {
 		cli.ShowCommandHelpAndExit(ctx, ctx.Command.Name, 1)
 	}
-	minio.StartGateway(ctx, &Weed{filer: args.First(), master: args.Get(1)})
+	minio.StartGateway(ctx, &Weed{filer: args.First(), masters: args.Get(1)})
 }
 
 type Weed struct {
-	filer  string
-	master string
+	filer   string
+	masters string
 }
 
 func (w *Weed) Name() string {
@@ -91,10 +92,11 @@ func (w *Weed) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		Transport: minio.NewGatewayHTTPTransport(),
 		Metrics:   metrics,
 	}
+	masterClient := wdclient.NewMasterClient(grpc.WithInsecure(), "client", pb.ServerAddress(w.filer), "", pb.ServerAddresses(w.masters).ToAddresses())
 
 	weedOptions := &WeedOptions{
 		Filer:          pb.ServerAddress(w.filer),
-		Master:         pb.ServerAddress(w.master),
+		MasterClient:   masterClient,
 		GrpcDialOption: grpc.WithInsecure(),
 	}
 
