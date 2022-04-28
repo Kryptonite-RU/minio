@@ -3,12 +3,13 @@ package weed
 import (
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+	"github.com/chrislusf/seaweedfs/weed/wdclient"
 	"google.golang.org/grpc"
 )
 
 type WeedOptions struct {
 	Filer          pb.ServerAddress
-	Master         pb.ServerAddress
+	MasterClient   *wdclient.MasterClient
 	GrpcDialOption grpc.DialOption
 }
 
