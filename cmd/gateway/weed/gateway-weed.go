@@ -95,7 +95,7 @@ func (w *Weed) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		Transport: minio.NewGatewayHTTPTransport(),
 		Metrics:   metrics,
 	}
-	masterClient := wdclient.NewMasterClient(grpc.WithInsecure(), "client", "", "", pb.ServerAddresses(w.masters).ToAddresses())
+	masterClient := wdclient.NewMasterClient(grpc.WithInsecure(), "client", "", "", pb.ServerAddresses(w.masters).ToAddressMap())
 	go masterClient.KeepConnectedToMaster()
 	masterClient.WaitUntilConnected()
 
