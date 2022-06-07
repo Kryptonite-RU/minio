@@ -244,13 +244,14 @@ func (w *weedObjects) GetObjectInfo(ctx context.Context, bucket, object string, 
 	}
 
 	return minio.ObjectInfo{
-		Bucket:  bucket,
-		Name:    object,
-		ModTime: time.Unix(entry.Attributes.Mtime, 0),
-		Size:    int64(entry.Attributes.FileSize),
-		IsDir:   entry.IsDirectory,
-		AccTime: time.Time{},
-		ETag:    filer.ETag(entry),
+		Bucket:      bucket,
+		Name:        object,
+		ModTime:     time.Unix(entry.Attributes.Mtime, 0),
+		Size:        int64(entry.Attributes.FileSize),
+		IsDir:       entry.IsDirectory,
+		AccTime:     time.Time{},
+		ETag:        filer.ETag(entry),
+		ContentType: entry.Attributes.Mime,
 	}, nil
 }
 
@@ -481,6 +482,13 @@ func (w *weedObjects) DeleteObjects(ctx context.Context, bucket string, objects 
 
 func (w *weedObjects) GetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {
 	path := util.NewFullPath(BucketDir, bucket)
+	exists, err := filer_pb.Exists(w.Client, BucketDir, bucket, true)
+	if err != nil {
+		return bi, err
+	}
+	if !exists {
+		return bi, minio.BucketNotFound{}
+	}
 	entry, err := filer_pb.GetEntry(w.Client, path)
 	if err != nil {
 		return bi, err
@@ -524,6 +532,9 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 
 		if err != nil {
 			return minio.ObjectInfo{}, err
+		}
+		for k, v := range opts.UserDefined {
+			req.Header.Add(k, v)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -658,6 +669,9 @@ func (w *weedObjects) PutObjectPart(ctx context.Context, bucket, object, uploadI
 	req, err := http.NewRequest("PUT", uploadURL, data)
 	if err != nil {
 		return minio.PartInfo{}, err
+	}
+	for k, v := range opts.UserDefined {
+		req.Header.Add(k, v)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
