@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math"
 	"net/http"
 	"path"
@@ -177,16 +178,19 @@ func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOf
 
 	if fullFile {
 		if res.StatusCode >= http.StatusBadRequest {
+			io.Copy(ioutil.Discard, res.Body)
 			res.Body.Close()
 			return fmt.Errorf("%s: %s", destURL, res.Status)
 		}
 	} else {
 		if res.StatusCode == http.StatusNotFound {
+			io.Copy(ioutil.Discard, res.Body)
 			res.Body.Close()
 			return fmt.Errorf("storage: object doesn't exist")
 		}
 
 		if res.StatusCode < 200 || res.StatusCode > 299 {
+			io.Copy(ioutil.Discard, res.Body)
 			res.Body.Close()
 			return fmt.Errorf("%s: %s", destURL, res.Status)
 		}
@@ -194,6 +198,7 @@ func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOf
 		partialContentNotSatisfied := start > 0 && length != 0 && res.StatusCode != http.StatusPartialContent
 
 		if partialContentNotSatisfied {
+			io.Copy(ioutil.Discard, res.Body)
 			res.Body.Close()
 			return fmt.Errorf("storage: partial request not satisfied")
 		}
@@ -205,6 +210,7 @@ func (w *weedObjects) getObject(ctx context.Context, bucket, key string, startOf
 	case "gzip":
 		reader, err = gzip.NewReader(res.Body)
 		if err != nil {
+			io.Copy(ioutil.Discard, res.Body)
 			res.Body.Close()
 			return err
 		}
@@ -541,6 +547,7 @@ func (w *weedObjects) PutObject(ctx context.Context, bucket string, object strin
 			return minio.ObjectInfo{}, err
 		}
 		defer resp.Body.Close()
+		defer io.Copy(ioutil.Discard, resp.Body)
 	}
 	fi, err := w.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
@@ -679,6 +686,7 @@ func (w *weedObjects) PutObjectPart(ctx context.Context, bucket, object, uploadI
 	}
 
 	defer resp.Body.Close()
+	defer io.Copy(ioutil.Discard, resp.Body)
 
 	info.PartNumber = partID
 	info.ETag = r.MD5CurrentHexString()
@@ -775,7 +783,7 @@ func (w *weedObjects) CompleteMultipartUpload(ctx context.Context, bucket, objec
 		return objInfo, err
 	}
 
-	_ = filer_pb.Remove(w.Client, w.weedPathJoin(bucket, multipartUploadDir), uploadID, true, true, true, false, nil)
+	_ = filer_pb.Remove(w.Client, w.weedPathJoin(bucket, multipartUploadDir), uploadID, false, true, true, false, nil)
 
 	return minio.ObjectInfo{
 		Bucket:  bucket,
